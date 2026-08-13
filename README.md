@@ -8,14 +8,63 @@ front end request resolves through a single `IN ()` lookup on a primary-key-size
 
 ## Requirements
 
-- WordPress 5.6+
+- WordPress 5.8+ (for the `Update URI` header the updater relies on)
 - PHP 7.4+
 
 ## Installation
 
-Copy this directory into `wp-content/plugins/wplinker` and activate it. The routes table is
-created on activation, and re-checked on load so a git or FTP deploy that skips the
-activation hook still upgrades the schema.
+Download `wplinker.zip` from the [latest release](https://github.com/domkirby/wplinker/releases)
+and install it through Plugins → Add New → Upload Plugin, or copy this directory into
+`wp-content/plugins/wplinker` and activate it. The routes table is created on activation, and
+re-checked on load so a git or FTP deploy that skips the activation hook still upgrades the
+schema.
+
+## Updates
+
+WPLinker updates itself from GitHub Releases — it is not on the WordPress.org plugin
+directory. Updates appear in Dashboard → Updates and on the Plugins screen exactly like any
+other plugin, including the one-click update and the background auto-update toggle.
+
+This works through the `Update URI` header, which has a useful side effect: WordPress.org
+will refuse to serve updates for a plugin whose `Update URI` points elsewhere, so nobody can
+take over your sites by publishing a plugin with the `wplinker` slug there.
+
+- The latest release is checked at most once every 12 hours and cached. Failures are cached
+  for an hour, so a rate-limited or unreachable GitHub never slows down or breaks the admin.
+- **Check for updates** in the plugin's row on the Plugins screen forces an immediate check,
+  as does the "Check again" button on the Updates screen.
+- Only published, non-prerelease releases are offered. Enable prereleases with the
+  `wplinker_updater_allow_prereleases` filter.
+- Packages are only ever downloaded from GitHub hosts; any other URL in a release is refused.
+
+The GitHub API allows 60 unauthenticated requests per hour per IP, which the caching stays
+well inside. On a host with many sites behind one IP, or for a private fork, define a token
+in `wp-config.php`:
+
+```php
+define( 'WPLINKER_GITHUB_TOKEN', 'ghp_...' );
+```
+
+A constant rather than a setting, deliberately: a token in the options table would be
+readable through database exports and backups.
+
+### Cutting a release
+
+```bash
+# bump both the Version header and WPLINKER_VERSION in wplinker.php
+git commit -am "Release 0.2.0"
+git tag v0.2.0
+git push origin main --tags
+```
+
+`.github/workflows/release.yml` then asserts that the tag, the `Version:` header and the
+`WPLINKER_VERSION` constant all agree, lints every file, runs the tests, builds a
+`wplinker.zip` containing a clean `wplinker/` directory (no `tests/`, no `.github/`), and
+attaches it to the release. Sites pick it up within 12 hours, or immediately on a forced
+check.
+
+If a release has no `wplinker.zip` asset, the updater falls back to GitHub's auto-generated
+zipball and renames the extracted folder so the plugin stays active.
 
 ## Concepts
 
@@ -124,6 +173,9 @@ route, `409` for a duplicate source path + match type pair.
 | `wplinker_permanent_redirect_max_age` | filter | `max-age` for 301/308 responses. |
 | `wplinker_allowed_status_codes` | filter | Allow 307/308 in addition to 301/302. |
 | `wplinker_reserved_paths` | filter | Extend the blocked source path list. |
+| `wplinker_updater_allow_prereleases` | filter | Offer prereleases as updates. |
+| `wplinker_updater_release_data` | filter | Override the parsed release; useful for testing the upgrade path without publishing one. |
+| `wplinker_updater_tested_up_to` | filter | WordPress version reported as tested. |
 | `wplinker_rest_capability` | filter | Capability required by the REST API. |
 | `wplinker_admin_capability` | filter | Capability required by the admin screens. |
 | `wplinker_pre_redirect` | action | Fires immediately before a redirect is sent. |
@@ -164,10 +216,12 @@ includes/class-wplinker-routes.php        data access and caching
 includes/class-wplinker-validator.php     normalisation and validation rules
 includes/class-wplinker-router.php        request interceptor
 includes/class-wplinker-rest-controller.php  custom-routes/v1
+includes/class-wplinker-updater.php       updates from GitHub Releases
 admin/class-wplinker-admin.php            menus, forms, notices
 admin/class-wplinker-list-table.php       WP_List_Table implementation
 uninstall.php                             data removal
 tests/smoke-test.php                      dependency free logic tests
+.github/workflows/release.yml             tag -> verified, built, published release
 ```
 
 ## Not in this pass

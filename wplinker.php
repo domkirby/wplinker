@@ -2,9 +2,11 @@
 /**
  * Plugin Name:       WPLinker
  * Plugin URI:        https://github.com/domkirby/wplinker
+ * Update URI:        https://github.com/domkirby/wplinker
  * Description:       API-first URL routing engine. Fast 301/302 redirects with wildcard subpath matching, backed by a custom table and a full REST API.
  * Version:           0.1.0
- * Requires at least: 5.6
+ * Requires at least: 5.8
+ * Tested up to:      6.8
  * Requires PHP:      7.4
  * Author:            Dom Kirby
  * License:           GPL-2.0-or-later
@@ -56,6 +58,14 @@ function wplinker_bootstrap() {
 
 	if ( is_admin() ) {
 		WPLinker_Admin::instance()->register();
+	}
+
+	// Updates are checked in the admin, on cron (where wp_update_plugins()
+	// actually runs) and under WP-CLI. A request being served a redirect never
+	// loads this code.
+	if ( is_admin() || wp_doing_cron() || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+		require_once WPLINKER_PATH . 'includes/class-wplinker-updater.php';
+		WPLinker_Updater::instance()->register();
 	}
 }
 add_action( 'plugins_loaded', 'wplinker_bootstrap' );

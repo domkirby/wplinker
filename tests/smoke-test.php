@@ -76,6 +76,7 @@ function is_wp_error( $thing ) {
 
 require_once __DIR__ . '/../includes/class-wplinker-validator.php';
 require_once __DIR__ . '/../includes/class-wplinker-router.php';
+require_once __DIR__ . '/../includes/class-wplinker-updater.php';
 
 $failures = 0;
 $total    = 0;
@@ -208,6 +209,104 @@ echo "\nRequest path\n";
 $_SERVER['REQUEST_URI'] = '/docs/api/v1?utm=1';
 check( 'derives the path from REQUEST_URI', '/docs/api/v1', $router->current_path() );
 unset( $_SERVER['REQUEST_URI'] );
+
+echo "\nRelease tag parsing\n";
+check( 'strips a leading v', '0.2.0', WPLinker_Updater::normalize_version( 'v0.2.0' ) );
+check( 'accepts a bare version', '0.2.0', WPLinker_Updater::normalize_version( '0.2.0' ) );
+check( 'strips an uppercase V', '1.0', WPLinker_Updater::normalize_version( 'V1.0' ) );
+check( 'keeps a prerelease suffix', '1.0.0-beta.1', WPLinker_Updater::normalize_version( 'v1.0.0-beta.1' ) );
+check( 'rejects a non version tag', '', WPLinker_Updater::normalize_version( 'nightly' ) );
+
+echo "\nPackage host allowlist\n";
+check( 'allows github.com', true, WPLinker_Updater::is_allowed_package_host( 'https://github.com/o/r/releases/download/v1/wplinker.zip' ) );
+check( 'allows the asset CDN', true, WPLinker_Updater::is_allowed_package_host( 'https://objects.githubusercontent.com/x' ) );
+check( 'rejects another host', false, WPLinker_Updater::is_allowed_package_host( 'https://evil.example/wplinker.zip' ) );
+check( 'rejects a hostless value', false, WPLinker_Updater::is_allowed_package_host( 'wplinker.zip' ) );
+
+/**
+ * Builds a GitHub release payload.
+ *
+ * @param array $overrides Fields to override.
+ * @return array
+ */
+function release_payload( $overrides = array() ) {
+	return array_merge(
+		array(
+			'tag_name'     => 'v0.2.0',
+			'draft'        => false,
+			'prerelease'   => false,
+			'html_url'     => 'https://github.com/domkirby/wplinker/releases/tag/v0.2.0',
+			'body'         => 'Notes.',
+			'published_at' => '2026-08-13T00:00:00Z',
+			'zipball_url'  => 'https://api.github.com/repos/domkirby/wplinker/zipball/v0.2.0',
+			'assets'       => array(),
+		),
+		$overrides
+	);
+}
+
+echo "\nRelease selection\n";
+$parsed = WPLinker_Updater::parse_release( release_payload() );
+check( 'parses the version', '0.2.0', $parsed['version'] );
+check( 'falls back to the zipball', 'https://api.github.com/repos/domkirby/wplinker/zipball/v0.2.0', $parsed['package'] );
+
+$with_asset = WPLinker_Updater::parse_release(
+	release_payload(
+		array(
+			'assets' => array(
+				array(
+					'name'                 => 'wplinker.zip',
+					'browser_download_url' => 'https://github.com/domkirby/wplinker/releases/download/v0.2.0/wplinker.zip',
+				),
+			),
+		)
+	)
+);
+check(
+	'prefers the built asset over the zipball',
+	'https://github.com/domkirby/wplinker/releases/download/v0.2.0/wplinker.zip',
+	$with_asset['package']
+);
+
+$other_asset = WPLinker_Updater::parse_release(
+	release_payload(
+		array(
+			'assets' => array(
+				array(
+					'name'                 => 'checksums.txt',
+					'browser_download_url' => 'https://github.com/domkirby/wplinker/releases/download/v0.2.0/checksums.txt',
+				),
+			),
+		)
+	)
+);
+check( 'ignores unrelated assets', 'https://api.github.com/repos/domkirby/wplinker/zipball/v0.2.0', $other_asset['package'] );
+
+$hijacked = WPLinker_Updater::parse_release(
+	release_payload(
+		array(
+			'assets' => array(
+				array(
+					'name'                 => 'wplinker.zip',
+					'browser_download_url' => 'https://evil.example/wplinker.zip',
+				),
+			),
+		)
+	)
+);
+check( 'refuses an off-GitHub asset and falls back', 'https://api.github.com/repos/domkirby/wplinker/zipball/v0.2.0', $hijacked['package'] );
+
+check( 'skips drafts', null, WPLinker_Updater::parse_release( release_payload( array( 'draft' => true ) ) ) );
+check( 'skips prereleases by default', null, WPLinker_Updater::parse_release( release_payload( array( 'prerelease' => true ) ) ) );
+check( 'skips a release with no package', null, WPLinker_Updater::parse_release( release_payload( array( 'zipball_url' => '' ) ) ) );
+check( 'skips a release with no tag', null, WPLinker_Updater::parse_release( release_payload( array( 'tag_name' => '' ) ) ) );
+check( 'skips an unparseable payload', null, WPLinker_Updater::parse_release( 'not-a-release' ) );
+
+echo "\nUpdate decision\n";
+check( 'newer version updates', true, WPLinker_Updater::is_newer( '0.2.0', '0.1.0' ) );
+check( 'same version does not', false, WPLinker_Updater::is_newer( '0.1.0', '0.1.0' ) );
+check( 'older version does not', false, WPLinker_Updater::is_newer( '0.0.9', '0.1.0' ) );
+check( 'a prerelease is older than its release', true, WPLinker_Updater::is_newer( '1.0.0', '1.0.0-beta.1' ) );
 
 echo "\n{$total} checks, {$failures} failed\n";
 

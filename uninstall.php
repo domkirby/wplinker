@@ -18,6 +18,7 @@ $wplinker_table = $wpdb->prefix . 'custom_routes';
 $wpdb->query( "DROP TABLE IF EXISTS {$wplinker_table}" );
 
 delete_option( 'wplinker_db_version' );
+delete_site_transient( 'wplinker_update_check' );
 
 // Per user screen options set by the routes list table.
 $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
