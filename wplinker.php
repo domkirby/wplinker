@@ -4,11 +4,12 @@
  * Plugin URI:        https://github.com/domkirby/wplinker
  * Update URI:        https://github.com/domkirby/wplinker
  * Description:       API-first URL routing engine. Fast 301/302 redirects with wildcard subpath matching, backed by a custom table and a full REST API.
- * Version:           0.1.2
+ * Version:           0.1.3
  * Requires at least: 5.8
  * Tested up to:      7.0
  * Requires PHP:      7.4
  * Author:            Dom Kirby
+ * Author URI:		  https://domkirby.com
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       wplinker
@@ -18,7 +19,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'WPLINKER_VERSION', '0.1.2' );
+define( 'WPLINKER_VERSION', '0.1.3' );
 define( 'WPLINKER_DB_VERSION', 1 );
 define( 'WPLINKER_FILE', __FILE__ );
 define( 'WPLINKER_PATH', plugin_dir_path( __FILE__ ) );
