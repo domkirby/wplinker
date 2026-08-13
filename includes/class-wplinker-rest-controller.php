@@ -1,0 +1,470 @@
+<?php
+/**
+ * REST API surface for the routing table.
+ *
+ * @package WPLinker
+ */
+
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Exposes full CRUD over routes at custom-routes/v1/routes.
+ */
+class WPLinker_REST_Routes_Controller extends WP_REST_Controller {
+
+	/**
+	 * Constructor.
+	 */
+	public function __construct() {
+		$this->namespace = 'custom-routes/v1';
+		$this->rest_base = 'routes';
+	}
+
+	/**
+	 * Registers the collection and item endpoints.
+	 *
+	 * @return void
+	 */
+	public function register_routes() {
+		register_rest_route(
+			$this->namespace,
+			'/' . $this->rest_base,
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'get_items' ),
+					'permission_callback' => array( $this, 'permissions_check' ),
+					'args'                => $this->get_collection_params(),
+				),
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( $this, 'create_item' ),
+					'permission_callback' => array( $this, 'permissions_check' ),
+					'args'                => $this->get_write_params(),
+				),
+				'schema' => array( $this, 'get_public_item_schema' ),
+			)
+		);
+
+		register_rest_route(
+			$this->namespace,
+			'/' . $this->rest_base . '/(?P<id>[\d]+)',
+			array(
+				'args'   => array(
+					'id' => array(
+						'description' => __( 'Unique identifier for the route.', 'wplinker' ),
+						'type'        => 'integer',
+					),
+				),
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'get_item' ),
+					'permission_callback' => array( $this, 'permissions_check' ),
+				),
+				array(
+					'methods'             => WP_REST_Server::EDITABLE,
+					'callback'            => array( $this, 'update_item' ),
+					'permission_callback' => array( $this, 'permissions_check' ),
+					'args'                => $this->get_write_params(),
+				),
+				array(
+					'methods'             => WP_REST_Server::DELETABLE,
+					'callback'            => array( $this, 'delete_item' ),
+					'permission_callback' => array( $this, 'permissions_check' ),
+				),
+				'schema' => array( $this, 'get_public_item_schema' ),
+			)
+		);
+	}
+
+	/**
+	 * Capability check applied to every endpoint.
+	 *
+	 * @return true|WP_Error
+	 */
+	public function permissions_check() {
+		/**
+		 * Filters the capability required to use the routes REST API.
+		 *
+		 * @param string $capability Capability name.
+		 */
+		$capability = apply_filters( 'wplinker_rest_capability', 'manage_options' );
+
+		if ( ! current_user_can( $capability ) ) {
+			return new WP_Error(
+				'wplinker_forbidden',
+				__( 'You are not allowed to manage routes.', 'wplinker' ),
+				array( 'status' => rest_authorization_required_code() )
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Lists routes.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response
+	 */
+	public function get_items( $request ) {
+		$args = array(
+			'page'     => (int) $request['page'],
+			'per_page' => (int) $request['per_page'],
+			'search'   => (string) $request['search'],
+			'orderby'  => (string) $request['orderby'],
+			'order'    => (string) $request['order'],
+		);
+
+		if ( $request['match_type'] ) {
+			$args['match_type'] = (string) $request['match_type'];
+		}
+
+		if ( $request['status_code'] ) {
+			$args['status_code'] = (int) $request['status_code'];
+		}
+
+		$routes = WPLinker_Routes::query( $args );
+		$total  = WPLinker_Routes::count( $args );
+		$items  = array();
+
+		foreach ( $routes as $route ) {
+			$items[] = $this->prepare_response_for_collection( $this->prepare_item_for_response( $route, $request ) );
+		}
+
+		$response = rest_ensure_response( $items );
+		$response->header( 'X-WP-Total', $total );
+		$response->header( 'X-WP-TotalPages', $args['per_page'] > 0 ? (int) ceil( $total / $args['per_page'] ) : 1 );
+
+		return $response;
+	}
+
+	/**
+	 * Retrieves a single route.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function get_item( $request ) {
+		$route = WPLinker_Routes::get( (int) $request['id'] );
+
+		if ( ! $route ) {
+			return $this->not_found();
+		}
+
+		return rest_ensure_response( $this->prepare_item_for_response( $route, $request ) );
+	}
+
+	/**
+	 * Creates a route.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function create_item( $request ) {
+		$data = WPLinker_Validator::validate( $this->extract_fields( $request ) );
+
+		if ( is_wp_error( $data ) ) {
+			return $data;
+		}
+
+		$id = WPLinker_Routes::insert( $data );
+
+		if ( is_wp_error( $id ) ) {
+			return $id;
+		}
+
+		$route    = WPLinker_Routes::get( $id );
+		$response = rest_ensure_response( $this->prepare_item_for_response( $route, $request ) );
+		$response->set_status( 201 );
+		$response->header( 'Location', rest_url( sprintf( '%s/%s/%d', $this->namespace, $this->rest_base, $id ) ) );
+
+		return $response;
+	}
+
+	/**
+	 * Updates a route.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function update_item( $request ) {
+		$id    = (int) $request['id'];
+		$route = WPLinker_Routes::get( $id );
+
+		if ( ! $route ) {
+			return $this->not_found();
+		}
+
+		$data = WPLinker_Validator::validate( $this->extract_fields( $request ), $id );
+
+		if ( is_wp_error( $data ) ) {
+			return $data;
+		}
+
+		$updated = WPLinker_Routes::update( $id, $data );
+
+		if ( is_wp_error( $updated ) ) {
+			return $updated;
+		}
+
+		return rest_ensure_response( $this->prepare_item_for_response( WPLinker_Routes::get( $id ), $request ) );
+	}
+
+	/**
+	 * Deletes a route.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function delete_item( $request ) {
+		$id    = (int) $request['id'];
+		$route = WPLinker_Routes::get( $id );
+
+		if ( ! $route ) {
+			return $this->not_found();
+		}
+
+		$previous = $this->prepare_item_for_response( $route, $request );
+
+		if ( ! WPLinker_Routes::delete( $id ) ) {
+			return new WP_Error(
+				'wplinker_delete_failed',
+				__( 'The route could not be deleted.', 'wplinker' ),
+				array( 'status' => 500 )
+			);
+		}
+
+		return rest_ensure_response(
+			array(
+				'deleted'  => true,
+				'previous' => $previous->get_data(),
+			)
+		);
+	}
+
+	/**
+	 * Shapes a row for output.
+	 *
+	 * @param object          $route   Route row.
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response
+	 */
+	public function prepare_item_for_response( $route, $request ) {
+		$data = array(
+			'id'              => (int) $route->id,
+			'source_path'     => $route->source_path,
+			'source_url'      => home_url( $route->source_path ),
+			'destination_url' => $route->destination_url,
+			'status_code'     => (int) $route->status_code,
+			'match_type'      => $route->match_type,
+			'clicks'          => (int) $route->clicks,
+			'created_at'      => mysql_to_rfc3339( $route->created_at ),
+			'updated_at'      => mysql_to_rfc3339( $route->updated_at ),
+		);
+
+		return rest_ensure_response( $data );
+	}
+
+	/**
+	 * Item schema.
+	 *
+	 * @return array
+	 */
+	public function get_item_schema() {
+		if ( $this->schema ) {
+			return $this->add_additional_fields_schema( $this->schema );
+		}
+
+		$this->schema = array(
+			'$schema'    => 'http://json-schema.org/draft-04/schema#',
+			'title'      => 'wplinker_route',
+			'type'       => 'object',
+			'properties' => array(
+				'id'              => array(
+					'description' => __( 'Unique identifier for the route.', 'wplinker' ),
+					'type'        => 'integer',
+					'context'     => array( 'view', 'edit' ),
+					'readonly'    => true,
+				),
+				'source_path'     => array(
+					'description' => __( 'Site relative path to match, for example /promo. A trailing /* creates a prefix route.', 'wplinker' ),
+					'type'        => 'string',
+					'context'     => array( 'view', 'edit' ),
+				),
+				'source_url'      => array(
+					'description' => __( 'Absolute URL of the source path.', 'wplinker' ),
+					'type'        => 'string',
+					'format'      => 'uri',
+					'context'     => array( 'view', 'edit' ),
+					'readonly'    => true,
+				),
+				'destination_url' => array(
+					'description' => __( 'Absolute URL or site relative path to redirect to.', 'wplinker' ),
+					'type'        => 'string',
+					'context'     => array( 'view', 'edit' ),
+				),
+				'status_code'     => array(
+					'description' => __( 'HTTP status code used for the redirect.', 'wplinker' ),
+					'type'        => 'integer',
+					'enum'        => WPLinker_Validator::allowed_status_codes(),
+					'context'     => array( 'view', 'edit' ),
+				),
+				'match_type'      => array(
+					'description' => __( 'How the source path is matched.', 'wplinker' ),
+					'type'        => 'string',
+					'enum'        => WPLinker_Validator::allowed_match_types(),
+					'context'     => array( 'view', 'edit' ),
+				),
+				'clicks'          => array(
+					'description' => __( 'Number of times the route has been served.', 'wplinker' ),
+					'type'        => 'integer',
+					'context'     => array( 'view', 'edit' ),
+					'readonly'    => true,
+				),
+				'created_at'      => array(
+					'description' => __( 'Creation time, GMT.', 'wplinker' ),
+					'type'        => 'string',
+					'format'      => 'date-time',
+					'context'     => array( 'view', 'edit' ),
+					'readonly'    => true,
+				),
+				'updated_at'      => array(
+					'description' => __( 'Last modification time, GMT.', 'wplinker' ),
+					'type'        => 'string',
+					'format'      => 'date-time',
+					'context'     => array( 'view', 'edit' ),
+					'readonly'    => true,
+				),
+			),
+		);
+
+		return $this->add_additional_fields_schema( $this->schema );
+	}
+
+	/**
+	 * Arguments accepted by the create and update endpoints.
+	 *
+	 * Both the column names and the shorter aliases from the design document
+	 * are accepted, so `source` and `source_path` behave identically.
+	 *
+	 * @return array
+	 */
+	public function get_write_params() {
+		return array(
+			'source_path'     => array(
+				'description'       => __( 'Site relative path to match. A trailing /* creates a prefix route.', 'wplinker' ),
+				'type'              => 'string',
+				'sanitize_callback' => 'sanitize_text_field',
+			),
+			'source'          => array(
+				'description'       => __( 'Alias of source_path.', 'wplinker' ),
+				'type'              => 'string',
+				'sanitize_callback' => 'sanitize_text_field',
+			),
+			'destination_url' => array(
+				'description' => __( 'Absolute URL or site relative path to redirect to.', 'wplinker' ),
+				'type'        => 'string',
+			),
+			'destination'     => array(
+				'description' => __( 'Alias of destination_url.', 'wplinker' ),
+				'type'        => 'string',
+			),
+			'status_code'     => array(
+				'description' => __( 'HTTP status code used for the redirect.', 'wplinker' ),
+				'type'        => 'integer',
+			),
+			'status'          => array(
+				'description' => __( 'Alias of status_code.', 'wplinker' ),
+				'type'        => 'integer',
+			),
+			'match_type'      => array(
+				'description' => __( 'exact or prefix.', 'wplinker' ),
+				'type'        => 'string',
+			),
+			'type'            => array(
+				'description' => __( 'Alias of match_type.', 'wplinker' ),
+				'type'        => 'string',
+			),
+		);
+	}
+
+	/**
+	 * Collection query parameters.
+	 *
+	 * @return array
+	 */
+	public function get_collection_params() {
+		return array(
+			'page'        => array(
+				'description'       => __( 'Current page of the collection.', 'wplinker' ),
+				'type'              => 'integer',
+				'default'           => 1,
+				'minimum'           => 1,
+				'sanitize_callback' => 'absint',
+			),
+			'per_page'    => array(
+				'description'       => __( 'Maximum number of items to return.', 'wplinker' ),
+				'type'              => 'integer',
+				'default'           => 20,
+				'minimum'           => 1,
+				'maximum'           => 100,
+				'sanitize_callback' => 'absint',
+			),
+			'search'      => array(
+				'description'       => __( 'Limit results to routes matching a string.', 'wplinker' ),
+				'type'              => 'string',
+				'default'           => '',
+				'sanitize_callback' => 'sanitize_text_field',
+			),
+			'orderby'     => array(
+				'description' => __( 'Sort collection by route attribute.', 'wplinker' ),
+				'type'        => 'string',
+				'default'     => 'id',
+				'enum'        => array( 'id', 'source_path', 'destination_url', 'status_code', 'match_type', 'clicks', 'created_at', 'updated_at' ),
+			),
+			'order'       => array(
+				'description' => __( 'Sort direction.', 'wplinker' ),
+				'type'        => 'string',
+				'default'     => 'desc',
+				'enum'        => array( 'asc', 'desc' ),
+			),
+			'match_type'  => array(
+				'description' => __( 'Limit results to a match type.', 'wplinker' ),
+				'type'        => 'string',
+				'enum'        => WPLinker_Validator::allowed_match_types(),
+			),
+			'status_code' => array(
+				'description' => __( 'Limit results to a status code.', 'wplinker' ),
+				'type'        => 'integer',
+			),
+		);
+	}
+
+	/**
+	 * Collects the writable fields present on a request.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return array
+	 */
+	private function extract_fields( $request ) {
+		$fields = array();
+
+		foreach ( array_keys( $this->get_write_params() ) as $key ) {
+			if ( null !== $request->get_param( $key ) ) {
+				$fields[ $key ] = $request->get_param( $key );
+			}
+		}
+
+		return $fields;
+	}
+
+	/**
+	 * Standard 404 response.
+	 *
+	 * @return WP_Error
+	 */
+	private function not_found() {
+		return new WP_Error( 'wplinker_not_found', __( 'Route not found.', 'wplinker' ), array( 'status' => 404 ) );
+	}
+}

@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v4
+
+      - name: Verify the tag, the plugin header and the version constant agree
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          HEADER=$(sed -n 's/^[[:space:]]*\*[[:space:]]*Version:[[:space:]]*\(.*\)$/\1/p' wplinker.php | head -1 | tr -d '[:space:]')
+          CONSTANT=$(sed -n "s/^define( 'WPLINKER_VERSION', '\(.*\)' );$/\1/p" wplinker.php | head -1)
+
+          echo "tag:      ${VERSION}"
+          echo "header:   ${HEADER}"
+          echo "constant: ${CONSTANT}"
+
+          # Left unchecked, these drift apart and the updater ends up offering
+          # an update that installs the same version forever.
+          if [ "${VERSION}" != "${HEADER}" ] || [ "${VERSION}" != "${CONSTANT}" ]; then
+            echo "::error::Version mismatch. The tag, the Version header and WPLINKER_VERSION must all match."
+            exit 1
+          fi
+
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Lint every PHP file
+        run: |
+          set -euo pipefail
+          find . -name '*.php' -not -path './.git/*' -print0 | xargs -0 -n1 -P4 php -l
+
+      - name: Run the smoke tests
+        run: php tests/smoke-test.php
+
+      - name: Build the plugin package
+        run: |
+          set -euo pipefail
+
+          # git archive ships only committed files, and honours the
+          # export-ignore rules in .gitattributes, so tests/ and .github/ stay
+          # out of the package without a second exclude list to maintain.
+          git archive --format=zip --prefix=wplinker/ -o wplinker.zip HEAD
+
+          # The archive must unpack straight into wp-content/plugins/wplinker.
+          if ! unzip -l wplinker.zip | grep -q 'wplinker/wplinker.php'; then
+            echo "::error::wplinker.zip does not contain wplinker/wplinker.php"
+            exit 1
+          fi
+
+          # Development files must not reach production sites.
+          if unzip -l wplinker.zip | grep -qE 'wplinker/(tests|\.github)/'; then
+            echo "::error::wplinker.zip contains development files"
+            exit 1
+          fi
+
+          unzip -l wplinker.zip
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+
+          # The tag may already have a release if one was drafted by hand.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" wplinker.zip --clobber
+          else
+            gh release create "${TAG}" wplinker.zip \
+              --title "WPLinker ${VERSION}" \
+              --generate-notes
+          fi
