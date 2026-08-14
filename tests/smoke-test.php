@@ -12,8 +12,13 @@
 
 define( 'ABSPATH', __DIR__ . '/' );
 define( 'HOUR_IN_SECONDS', 3600 );
+define( 'WP_DEBUG', true );
 
-$GLOBALS['wplinker_test_home'] = 'https://example.com';
+$GLOBALS['wplinker_test_home']    = 'https://example.com';
+$GLOBALS['wplinker_test_filters'] = array();
+$GLOBALS['wplinker_test_caps']    = array();
+$GLOBALS['wplinker_test_roles']   = array();
+$GLOBALS['wplinker_test_notices'] = array();
 
 /**
  * Minimal stubs for the handful of WordPress functions the logic touches.
@@ -27,7 +32,37 @@ function wp_parse_url( $url, $component = -1 ) {
 }
 
 function apply_filters( $hook, $value ) {
+	if ( isset( $GLOBALS['wplinker_test_filters'][ $hook ] ) ) {
+		return $GLOBALS['wplinker_test_filters'][ $hook ];
+	}
+
 	return $value;
+}
+
+function current_user_can( $capability ) {
+	return ! empty( $GLOBALS['wplinker_test_caps'][ $capability ] );
+}
+
+function rest_authorization_required_code() {
+	return 403;
+}
+
+function wp_roles() {
+	return (object) array( 'roles' => $GLOBALS['wplinker_test_roles'] );
+}
+
+function _doing_it_wrong( $function_name, $message, $version ) {
+	$GLOBALS['wplinker_test_notices'][] = $message;
+}
+
+/**
+ * The REST controller only needs the base class to exist; none of the parent
+ * behaviour is exercised here.
+ */
+class WP_REST_Controller {
+	protected $namespace;
+	protected $rest_base;
+	protected $schema;
 }
 
 function do_action( $hook ) {}
@@ -77,6 +112,7 @@ function is_wp_error( $thing ) {
 require_once __DIR__ . '/../includes/class-wplinker-validator.php';
 require_once __DIR__ . '/../includes/class-wplinker-router.php';
 require_once __DIR__ . '/../includes/class-wplinker-updater.php';
+require_once __DIR__ . '/../includes/class-wplinker-rest-controller.php';
 
 $failures = 0;
 $total    = 0;
@@ -132,6 +168,17 @@ check( 'keeps the root path', '/', WPLinker_Validator::normalize_path( '/' ) );
 check( 'collapses double slashes', '/a/b', WPLinker_Validator::normalize_path( '//a//b' ) );
 check( 'drops the query string', '/promo', WPLinker_Validator::normalize_path( '/promo?utm=1' ) );
 check( 'reduces a full URL to its path', '/promo', WPLinker_Validator::normalize_path( 'https://example.com/promo' ) );
+check( 'leaves relative segments in place rather than resolving them', '/foo/../wp-admin', WPLinker_Validator::normalize_path( '/foo/../wp-admin' ) );
+
+echo "\nRelative segments\n";
+check( 'flags a parent segment', true, WPLinker_Validator::has_dot_segments( '/foo/../wp-admin' ) );
+check( 'flags a leading parent segment', true, WPLinker_Validator::has_dot_segments( '/../wp-admin' ) );
+check( 'flags a current directory segment', true, WPLinker_Validator::has_dot_segments( '/foo/./bar' ) );
+check( 'flags a percent encoded parent segment', true, WPLinker_Validator::has_dot_segments( '/foo/%2e%2e/wp-admin' ) );
+check( 'flags a backslash separated parent segment', true, WPLinker_Validator::has_dot_segments( '/foo\\..\\wp-admin' ) );
+check( 'allows a dot inside a segment', false, WPLinker_Validator::has_dot_segments( '/wp-login.php' ) );
+check( 'allows a file extension', false, WPLinker_Validator::has_dot_segments( '/docs/guide.v2.html' ) );
+check( 'allows an ordinary path', false, WPLinker_Validator::has_dot_segments( '/promo' ) );
 
 echo "\nSource parsing\n";
 $parsed = WPLinker_Validator::parse_source( '/docs/*' );
@@ -149,6 +196,9 @@ check( 'blocks paths under /wp-json', true, WPLinker_Validator::is_reserved( '/w
 check( 'blocks a catch all prefix', true, WPLinker_Validator::is_reserved( '/', 'prefix' ) );
 check( 'blocks a prefix containing a reserved path', true, WPLinker_Validator::is_reserved( '/wp-content', 'prefix' ) );
 check( 'allows an ordinary path', false, WPLinker_Validator::is_reserved( '/promo', 'exact' ) );
+check( 'blocks a traversal into /wp-admin', true, WPLinker_Validator::is_reserved( '/foo/../wp-admin', 'exact' ) );
+check( 'blocks a traversal that resolves nowhere reserved', true, WPLinker_Validator::is_reserved( '/foo/../promo', 'exact' ) );
+check( 'blocks a percent encoded traversal', true, WPLinker_Validator::is_reserved( '/foo/%2e%2e/wp-admin', 'prefix' ) );
 
 echo "\nLoop detection\n";
 check( 'same path on the same host loops', true, WPLinker_Validator::causes_loop( '/promo', 'exact', 'https://example.com/promo' ) );
@@ -307,6 +357,76 @@ check( 'newer version updates', true, WPLinker_Updater::is_newer( '0.2.0', '0.1.
 check( 'same version does not', false, WPLinker_Updater::is_newer( '0.1.0', '0.1.0' ) );
 check( 'older version does not', false, WPLinker_Updater::is_newer( '0.0.9', '0.1.0' ) );
 check( 'a prerelease is older than its release', true, WPLinker_Updater::is_newer( '1.0.0', '1.0.0-beta.1' ) );
+
+echo "\nREST capabilities\n";
+
+/**
+ * Points a filter hook at a fixed value for the next check.
+ *
+ * @param string $hook  Hook name.
+ * @param string $value Value the hook returns.
+ * @return void
+ */
+function filter_returns( $hook, $value ) {
+	$GLOBALS['wplinker_test_filters'][ $hook ] = $value;
+}
+
+/**
+ * Clears the filter registry between checks.
+ *
+ * @return void
+ */
+function reset_filters() {
+	$GLOBALS['wplinker_test_filters'] = array();
+}
+
+check( 'read defaults to manage_options', 'manage_options', WPLinker_REST_Routes_Controller::read_capability() );
+check( 'write defaults to manage_options', 'manage_options', WPLinker_REST_Routes_Controller::write_capability() );
+
+filter_returns( 'wplinker_rest_capability', 'edit_posts' );
+check( 'the legacy filter still lowers read', 'edit_posts', WPLinker_REST_Routes_Controller::read_capability() );
+check( 'the legacy filter cannot lower write', 'manage_options', WPLinker_REST_Routes_Controller::write_capability() );
+
+filter_returns( 'wplinker_rest_read_capability', 'publish_posts' );
+check( 'the read filter overrides the legacy filter', 'publish_posts', WPLinker_REST_Routes_Controller::read_capability() );
+
+reset_filters();
+filter_returns( 'wplinker_rest_write_capability', 'edit_pages' );
+check( 'the write filter moves write', 'edit_pages', WPLinker_REST_Routes_Controller::write_capability() );
+check( 'the write filter leaves read alone', 'manage_options', WPLinker_REST_Routes_Controller::read_capability() );
+
+reset_filters();
+filter_returns( 'wplinker_rest_capability', 'edit_posts' );
+$GLOBALS['wplinker_test_caps'] = array( 'edit_posts' => true );
+
+$controller = new WPLinker_REST_Routes_Controller();
+$denied     = $controller->write_permissions_check();
+
+check( 'a read-only role may read', true, $controller->permissions_check() );
+check( 'a read-only role may not write', 'wplinker_forbidden', is_wp_error( $denied ) ? $denied->get_error_code() : 'allowed' );
+
+$GLOBALS['wplinker_test_caps']  = array( 'manage_options' => true );
+$GLOBALS['wplinker_test_roles'] = array(
+	'editor'        => array( 'capabilities' => array( 'edit_posts' => true, 'wplinker_weak_cap' => true ) ),
+	'administrator' => array( 'capabilities' => array( 'manage_options' => true, 'wplinker_admin_cap' => true ) ),
+);
+
+reset_filters();
+check( 'an administrator may write', true, $controller->write_permissions_check() );
+check( 'the default write capability raises no notice', 0, count( $GLOBALS['wplinker_test_notices'] ) );
+
+filter_returns( 'wplinker_rest_write_capability', 'wplinker_admin_cap' );
+WPLinker_REST_Routes_Controller::write_capability();
+check( 'an admin only capability raises no notice', 0, count( $GLOBALS['wplinker_test_notices'] ) );
+
+filter_returns( 'wplinker_rest_write_capability', 'wplinker_weak_cap' );
+WPLinker_REST_Routes_Controller::write_capability();
+check( 'a capability a non-admin role holds raises a notice', 1, count( $GLOBALS['wplinker_test_notices'] ) );
+
+WPLinker_REST_Routes_Controller::write_capability();
+check( 'the notice is not repeated for the same capability', 1, count( $GLOBALS['wplinker_test_notices'] ) );
+
+reset_filters();
 
 echo "\n{$total} checks, {$failures} failed\n";
 

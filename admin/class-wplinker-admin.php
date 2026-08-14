@@ -65,11 +65,21 @@ class WPLinker_Admin {
 	/**
 	 * Capability required for every screen and action.
 	 *
+	 * This one capability covers reading the route list *and* the Add Route,
+	 * edit and delete actions, so lowering it is not a read-only concession:
+	 * the role also gains the ability to redirect any path on this site to any
+	 * destination, which is a phishing primitive on a trusted domain. Keep it
+	 * administrator-equivalent, the same way the REST write tier
+	 * (wplinker_rest_write_capability) should be.
+	 *
 	 * @return string
 	 */
 	public static function capability() {
 		/**
 		 * Filters the capability required to manage routes in the admin.
+		 *
+		 * Covers both viewing and writing routes. Never set it below an
+		 * administrator-equivalent capability.
 		 *
 		 * @param string $capability Capability name.
 		 */

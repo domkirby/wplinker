@@ -99,9 +99,10 @@ user's admin colour scheme.
 
 ## REST API
 
-Namespace `custom-routes/v1`. Every endpoint requires `manage_options` and standard
-WordPress REST authentication (application passwords, cookies + nonce, or whatever your
-auth plugin provides).
+Namespace `custom-routes/v1`. Every endpoint requires standard WordPress REST
+authentication (application passwords, cookies + nonce, or whatever your auth plugin
+provides) plus a capability: reads are gated on `wplinker_rest_read_capability`, writes on
+`wplinker_rest_write_capability`. Both default to `manage_options`.
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
@@ -132,6 +133,24 @@ curl -u admin:APPLICATION_PASSWORD \
 
 A trailing `/*` on the source implies `match_type: prefix`, so `type` can be omitted.
 
+### Capabilities
+
+Read and write are separate tiers on purpose. **Never lower the write capability below a
+trusted, site-wide-admin-equivalent role.** Writing a route means pointing any path on this
+site at any destination, so a role with write access can serve arbitrary external redirects
+from your trusted domain — a phishing primitive, not a content-management convenience.
+Loosening *read* access (to let a marketing or editor role see the routing table) is fine and
+is what `wplinker_rest_read_capability` is for.
+
+```php
+// Editors may look at the routing table; only administrators may change it.
+add_filter( 'wplinker_rest_read_capability', fn() => 'edit_posts' );
+```
+
+The older `wplinker_rest_capability` filter still works, but it now feeds the **read**
+capability only — it can no longer grant write access. Under `WP_DEBUG`, filtering the write
+capability to something a non-administrator role holds logs a `_doing_it_wrong()` notice.
+
 Errors come back as standard REST errors: `400` for validation failures, `404` for a missing
 route, `409` for a duplicate source path + match type pair.
 
@@ -144,6 +163,11 @@ route, `409` for a duplicate source path + match type pair.
   prefix), `/wp-content`, `/wp-includes`, `/xmlrpc.php` and friends cannot be used as a
   source, either directly or by a prefix route that would sit above them. A catch-all `/*`
   is refused for the same reason. Extend the list with `wplinker_reserved_paths`.
+- **Relative segments.** A source path containing a `.` or `..` segment — in either its
+  literal or percent encoded form — is rejected outright. Nothing resolves those before the
+  reserved-path check, so `/foo/../wp-admin` would otherwise slip past a list that only knows
+  about `/wp-admin`. Requests arriving with a relative segment are handed back to WordPress
+  rather than matched against the routing table.
 - **Request scope.** The router ignores admin, AJAX, cron, WP-CLI and REST requests, and
   anything that is not a `GET` or `HEAD`.
 - **Cache headers.** Permanent redirects are sent with `Cache-Control: public, max-age=3600`
@@ -176,8 +200,10 @@ route, `409` for a duplicate source path + match type pair.
 | `wplinker_updater_allow_prereleases` | filter | Offer prereleases as updates. |
 | `wplinker_updater_release_data` | filter | Override the parsed release; useful for testing the upgrade path without publishing one. |
 | `wplinker_updater_tested_up_to` | filter | WordPress version reported as tested. |
-| `wplinker_rest_capability` | filter | Capability required by the REST API. |
-| `wplinker_admin_capability` | filter | Capability required by the admin screens. |
+| `wplinker_rest_read_capability` | filter | Capability required to read routes over REST. Safe to lower. |
+| `wplinker_rest_write_capability` | filter | Capability required to create, update or delete routes over REST. Keep it administrator-equivalent; lowering it grants open-redirect creation. |
+| `wplinker_rest_capability` | filter | Deprecated alias; feeds the REST **read** capability only. |
+| `wplinker_admin_capability` | filter | Capability required by the admin screens. Covers viewing *and* writing, so lowering it grants redirect creation. |
 | `wplinker_pre_redirect` | action | Fires immediately before a redirect is sent. |
 | `wplinker_routes_changed` | action | Fires after any write; use it to purge an edge cache. |
 
