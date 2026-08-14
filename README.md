@@ -163,6 +163,11 @@ route, `409` for a duplicate source path + match type pair.
   prefix), `/wp-content`, `/wp-includes`, `/xmlrpc.php` and friends cannot be used as a
   source, either directly or by a prefix route that would sit above them. A catch-all `/*`
   is refused for the same reason. Extend the list with `wplinker_reserved_paths`.
+- **Relative segments.** A source path containing a `.` or `..` segment — in either its
+  literal or percent encoded form — is rejected outright. Nothing resolves those before the
+  reserved-path check, so `/foo/../wp-admin` would otherwise slip past a list that only knows
+  about `/wp-admin`. Requests arriving with a relative segment are handed back to WordPress
+  rather than matched against the routing table.
 - **Request scope.** The router ignores admin, AJAX, cron, WP-CLI and REST requests, and
   anything that is not a `GET` or `HEAD`.
 - **Cache headers.** Permanent redirects are sent with `Cache-Control: public, max-age=3600`

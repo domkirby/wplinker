@@ -18,6 +18,11 @@ class WPLinker_Validator {
 	 * The site's home path is stripped so routes stay portable between a root
 	 * install and a subdirectory install.
 	 *
+	 * Relative segments are deliberately *not* resolved here: this runs on every
+	 * request, and silently rewriting a path would make the stored route and the
+	 * request that matches it disagree. Callers validating user input reject them
+	 * instead, via has_dot_segments().
+	 *
 	 * @param string $raw Raw path or absolute URL.
 	 * @return string
 	 */
@@ -48,6 +53,41 @@ class WPLinker_Validator {
 		}
 
 		return $raw;
+	}
+
+	/**
+	 * Whether a path contains a relative "." or ".." segment.
+	 *
+	 * Nothing resolves these before the reserved-path check, so `/foo/../wp-admin`
+	 * would otherwise sail past a list that only knows about `/wp-admin`. A source
+	 * path has no legitimate use for a relative segment, so they are rejected
+	 * rather than resolved.
+	 *
+	 * The percent decoded form is checked as well, because the router decodes the
+	 * request URI before matching. Backslashes count as separators: some servers
+	 * treat them that way, and no route needs one.
+	 *
+	 * @param string $path Path to inspect, raw or normalised.
+	 * @return bool
+	 */
+	public static function has_dot_segments( $path ) {
+		$path       = (string) $path;
+		$candidates = array( $path );
+		$decoded    = rawurldecode( $path );
+
+		if ( $decoded !== $path ) {
+			$candidates[] = $decoded;
+		}
+
+		foreach ( $candidates as $candidate ) {
+			foreach ( preg_split( '#[/\\\\]#', $candidate ) as $segment ) {
+				if ( '.' === $segment || '..' === $segment ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -144,12 +184,20 @@ class WPLinker_Validator {
 	 * A prefix route also collides when a reserved path sits *underneath* it,
 	 * which is what stops `/*` from swallowing the whole admin.
 	 *
+	 * A path carrying a relative segment is always treated as reserved: the
+	 * comparisons below are literal, so `/foo/../wp-admin` would otherwise look
+	 * like an ordinary path to every one of them.
+	 *
 	 * @param string $source_path Normalised source path.
 	 * @param string $match_type  exact|prefix.
 	 * @return bool
 	 */
 	public static function is_reserved( $source_path, $match_type ) {
 		if ( 'prefix' === $match_type && '/' === $source_path ) {
+			return true;
+		}
+
+		if ( self::has_dot_segments( $source_path ) ) {
 			return true;
 		}
 
@@ -235,6 +283,14 @@ class WPLinker_Validator {
 
 		if ( strlen( $source_path ) > 255 ) {
 			return new WP_Error( 'wplinker_invalid_source', __( 'The source path may not be longer than 255 characters.', 'wplinker' ), array( 'status' => 400 ) );
+		}
+
+		if ( self::has_dot_segments( $source_path ) ) {
+			return new WP_Error(
+				'wplinker_invalid_source',
+				__( 'The source path may not contain "." or ".." segments.', 'wplinker' ),
+				array( 'status' => 400 )
+			);
 		}
 
 		if ( ! in_array( $match_type, self::allowed_match_types(), true ) ) {

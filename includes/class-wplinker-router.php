@@ -340,6 +340,11 @@ class WPLinker_Router {
 	/**
 	 * The normalised path for the current request.
 	 *
+	 * A request carrying a relative segment is left to WordPress: the path is
+	 * matched literally against stored sources, so serving one would let a
+	 * request reach a route through a spelling the reserved-path check never saw.
+	 * The strpos() guard keeps the segment scan off the ordinary request path.
+	 *
 	 * @return string
 	 */
 	public function current_path() {
@@ -351,7 +356,13 @@ class WPLinker_Router {
 		$uri = (string) wp_parse_url( $uri, PHP_URL_PATH );
 		$uri = rawurldecode( $uri );
 
-		return WPLinker_Validator::normalize_path( $uri );
+		$path = WPLinker_Validator::normalize_path( $uri );
+
+		if ( false !== strpos( $path, '.' ) && WPLinker_Validator::has_dot_segments( $path ) ) {
+			return '';
+		}
+
+		return $path;
 	}
 
 	/**

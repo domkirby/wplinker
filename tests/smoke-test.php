@@ -168,6 +168,17 @@ check( 'keeps the root path', '/', WPLinker_Validator::normalize_path( '/' ) );
 check( 'collapses double slashes', '/a/b', WPLinker_Validator::normalize_path( '//a//b' ) );
 check( 'drops the query string', '/promo', WPLinker_Validator::normalize_path( '/promo?utm=1' ) );
 check( 'reduces a full URL to its path', '/promo', WPLinker_Validator::normalize_path( 'https://example.com/promo' ) );
+check( 'leaves relative segments in place rather than resolving them', '/foo/../wp-admin', WPLinker_Validator::normalize_path( '/foo/../wp-admin' ) );
+
+echo "\nRelative segments\n";
+check( 'flags a parent segment', true, WPLinker_Validator::has_dot_segments( '/foo/../wp-admin' ) );
+check( 'flags a leading parent segment', true, WPLinker_Validator::has_dot_segments( '/../wp-admin' ) );
+check( 'flags a current directory segment', true, WPLinker_Validator::has_dot_segments( '/foo/./bar' ) );
+check( 'flags a percent encoded parent segment', true, WPLinker_Validator::has_dot_segments( '/foo/%2e%2e/wp-admin' ) );
+check( 'flags a backslash separated parent segment', true, WPLinker_Validator::has_dot_segments( '/foo\\..\\wp-admin' ) );
+check( 'allows a dot inside a segment', false, WPLinker_Validator::has_dot_segments( '/wp-login.php' ) );
+check( 'allows a file extension', false, WPLinker_Validator::has_dot_segments( '/docs/guide.v2.html' ) );
+check( 'allows an ordinary path', false, WPLinker_Validator::has_dot_segments( '/promo' ) );
 
 echo "\nSource parsing\n";
 $parsed = WPLinker_Validator::parse_source( '/docs/*' );
@@ -185,6 +196,9 @@ check( 'blocks paths under /wp-json', true, WPLinker_Validator::is_reserved( '/w
 check( 'blocks a catch all prefix', true, WPLinker_Validator::is_reserved( '/', 'prefix' ) );
 check( 'blocks a prefix containing a reserved path', true, WPLinker_Validator::is_reserved( '/wp-content', 'prefix' ) );
 check( 'allows an ordinary path', false, WPLinker_Validator::is_reserved( '/promo', 'exact' ) );
+check( 'blocks a traversal into /wp-admin', true, WPLinker_Validator::is_reserved( '/foo/../wp-admin', 'exact' ) );
+check( 'blocks a traversal that resolves nowhere reserved', true, WPLinker_Validator::is_reserved( '/foo/../promo', 'exact' ) );
+check( 'blocks a percent encoded traversal', true, WPLinker_Validator::is_reserved( '/foo/%2e%2e/wp-admin', 'prefix' ) );
 
 echo "\nLoop detection\n";
 check( 'same path on the same host loops', true, WPLinker_Validator::causes_loop( '/promo', 'exact', 'https://example.com/promo' ) );
