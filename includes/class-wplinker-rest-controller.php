@@ -39,7 +39,7 @@ class WPLinker_REST_Routes_Controller extends WP_REST_Controller {
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_item' ),
-					'permission_callback' => array( $this, 'permissions_check' ),
+					'permission_callback' => array( $this, 'write_permissions_check' ),
 					'args'                => $this->get_write_params(),
 				),
 				'schema' => array( $this, 'get_public_item_schema' ),
@@ -64,13 +64,13 @@ class WPLinker_REST_Routes_Controller extends WP_REST_Controller {
 				array(
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_item' ),
-					'permission_callback' => array( $this, 'permissions_check' ),
+					'permission_callback' => array( $this, 'write_permissions_check' ),
 					'args'                => $this->get_write_params(),
 				),
 				array(
 					'methods'             => WP_REST_Server::DELETABLE,
 					'callback'            => array( $this, 'delete_item' ),
-					'permission_callback' => array( $this, 'permissions_check' ),
+					'permission_callback' => array( $this, 'write_permissions_check' ),
 				),
 				'schema' => array( $this, 'get_public_item_schema' ),
 			)
@@ -78,27 +78,140 @@ class WPLinker_REST_Routes_Controller extends WP_REST_Controller {
 	}
 
 	/**
-	 * Capability check applied to every endpoint.
+	 * Capability required to read routes.
 	 *
-	 * @return true|WP_Error
+	 * Reading a route is ordinary content management, so this tier is safe to
+	 * lower for an editor or marketing role.
+	 *
+	 * @return string
 	 */
-	public function permissions_check() {
+	public static function read_capability() {
 		/**
 		 * Filters the capability required to use the routes REST API.
+		 *
+		 * @deprecated 0.1.4 Use wplinker_rest_read_capability instead. This filter now
+		 *                   only affects reads; writes are governed by
+		 *                   wplinker_rest_write_capability so that loosening read access
+		 *                   cannot hand out redirect creation by accident.
 		 *
 		 * @param string $capability Capability name.
 		 */
 		$capability = apply_filters( 'wplinker_rest_capability', 'manage_options' );
 
+		/**
+		 * Filters the capability required to read routes through the REST API.
+		 *
+		 * @param string $capability Capability name.
+		 */
+		return apply_filters( 'wplinker_rest_read_capability', $capability );
+	}
+
+	/**
+	 * Capability required to create, update or delete routes.
+	 *
+	 * Writing a route means pointing a path on this site at any destination, so
+	 * this tier must stay at a trusted, site-wide-admin-equivalent role. Lowering
+	 * it hands the role a phishing primitive: arbitrary external redirects served
+	 * from the site's own trusted domain.
+	 *
+	 * @return string
+	 */
+	public static function write_capability() {
+		/**
+		 * Filters the capability required to write routes through the REST API.
+		 *
+		 * Never set this below an administrator-equivalent capability. A user who
+		 * can write routes can redirect any path on this site to any destination.
+		 *
+		 * @param string $capability Capability name.
+		 */
+		$capability = apply_filters( 'wplinker_rest_write_capability', 'manage_options' );
+
+		self::warn_on_weak_write_capability( $capability );
+
+		return $capability;
+	}
+
+	/**
+	 * Read capability check, applied to the GET endpoints.
+	 *
+	 * @return true|WP_Error
+	 */
+	public function permissions_check() {
+		return $this->check_capability( self::read_capability() );
+	}
+
+	/**
+	 * Write capability check, applied to the POST, PUT/PATCH and DELETE endpoints.
+	 *
+	 * @return true|WP_Error
+	 */
+	public function write_permissions_check() {
+		return $this->check_capability( self::write_capability(), __( 'You are not allowed to create or modify routes.', 'wplinker' ) );
+	}
+
+	/**
+	 * Shared capability gate.
+	 *
+	 * @param string $capability Capability the current user must hold.
+	 * @param string $message    Optional. Error message returned when they do not.
+	 * @return true|WP_Error
+	 */
+	private function check_capability( $capability, $message = '' ) {
 		if ( ! current_user_can( $capability ) ) {
 			return new WP_Error(
 				'wplinker_forbidden',
-				__( 'You are not allowed to manage routes.', 'wplinker' ),
+				$message ? $message : __( 'You are not allowed to manage routes.', 'wplinker' ),
 				array( 'status' => rest_authorization_required_code() )
 			);
 		}
 
 		return true;
+	}
+
+	/**
+	 * Flags a write capability that a non-administrator role holds.
+	 *
+	 * Only runs under WP_DEBUG: it is a development aid for catching a filter that
+	 * was meant to loosen read access, not a runtime check. The result is memoised
+	 * per capability so a request never scans the roles twice.
+	 *
+	 * @param string $capability Filtered write capability.
+	 * @return void
+	 */
+	private static function warn_on_weak_write_capability( $capability ) {
+		static $warned = array();
+
+		if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG || 'manage_options' === $capability ) {
+			return;
+		}
+
+		if ( isset( $warned[ $capability ] ) || ! function_exists( 'wp_roles' ) || ! function_exists( '_doing_it_wrong' ) ) {
+			return;
+		}
+
+		$warned[ $capability ] = true;
+
+		foreach ( wp_roles()->roles as $slug => $role ) {
+			$caps = isset( $role['capabilities'] ) ? (array) $role['capabilities'] : array();
+
+			if ( empty( $caps[ $capability ] ) || ! empty( $caps['manage_options'] ) ) {
+				continue;
+			}
+
+			_doing_it_wrong(
+				__METHOD__,
+				sprintf(
+					/* translators: 1: capability name, 2: role slug. */
+					__( 'wplinker_rest_write_capability was filtered to "%1$s", which the "%2$s" role holds without being an administrator. Writing routes allows arbitrary redirects from this site to any destination, so this capability should stay administrator-equivalent.', 'wplinker' ),
+					$capability,
+					$slug
+				),
+				'0.1.4'
+			);
+
+			return;
+		}
 	}
 
 	/**
