@@ -89,7 +89,7 @@ class WPLinker_REST_Routes_Controller extends WP_REST_Controller {
 		/**
 		 * Filters the capability required to use the routes REST API.
 		 *
-		 * @deprecated 0.1.4 Use wplinker_rest_read_capability instead. This filter now
+		 * @deprecated 0.2.0 Use wplinker_rest_read_capability instead. This filter now
 		 *                   only affects reads; writes are governed by
 		 *                   wplinker_rest_write_capability so that loosening read access
 		 *                   cannot hand out redirect creation by accident.
@@ -207,7 +207,7 @@ class WPLinker_REST_Routes_Controller extends WP_REST_Controller {
 					$capability,
 					$slug
 				),
-				'0.1.4'
+				'0.2.0'
 			);
 
 			return;
